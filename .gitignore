@@ -26,6 +26,15 @@ htmlcov/
 # Jupyter
 .ipynb_checkpoints/
 
+# Local HL7 message store
+*.db
+*.db-wal
+*.db-shm
+
+# Downloaded HL7 sample messages
+data/*
+!data/.gitkeep
+
 # Environment and secrets
 .env
 .env.*

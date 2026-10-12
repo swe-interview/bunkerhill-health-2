@@ -1,0 +1,15 @@
+[project]
+name = "hl7search"
+version = "0.1.0"
+description = "Accept HL7 v2 messages over TCP and search them by patient."
+requires-python = ">=3.12"
+
+[project.scripts]
+hl7search = "hl7search.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["hl7search*"]
