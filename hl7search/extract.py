@@ -19,21 +19,30 @@ of trigger events:
   without a patient id are acknowledged by the server and not stored.
 """
 
+from typing import Any
+
 from hl7search.models import ClinicalRecord, Observation, Order, Visit
-from hl7search.parse import Delimiters, Message, Segment, component, repetitions, unescape
+from hl7search.parse import (
+    Message,
+    component_text,
+    field_text,
+    repetition_component,
+    repetitions,
+    unescape,
+)
 
 
 def extract(message: Message) -> ClinicalRecord:
     """Build a clinical record from ``message``."""
 
-    delimiters = message.delimiters
-    header = message.segment("MSH")
-    if header is None:
+    encoding = message.hl7.encoding_chars
+    header = message.hl7.msh
+    if not header:
         raise ValueError("parsed message is missing MSH")
 
-    message_type = _text(component(header.get(9), delimiters.component, 1), delimiters)
-    trigger = _text(component(header.get(9), delimiters.component, 2), delimiters)
-    patient_ids, name, birth_date, sex = _patient(message.segment("PID"), delimiters)
+    message_type = _text(component_text(header.msh_9, 1), encoding)
+    trigger = _text(component_text(header.msh_9, 2), encoding)
+    patient_ids, name, birth_date, sex = _patient(message.hl7.pid, encoding)
 
     orders: list[Order] = []
     pending_control = ""
@@ -62,22 +71,22 @@ def extract(message: Message) -> ClinicalRecord:
         current = None
         open_observations = []
 
-    for segment in message.segments:
+    for segment in message.hl7.children:
         if segment.name == "ORC":
-            pending_control = _text(segment.get(1), delimiters)
-            pending_placer = _identifier(segment.get(2), delimiters)
-            pending_filler = _identifier(segment.get(3), delimiters)
+            pending_control = _text(field_text(segment.orc_1), encoding)
+            pending_placer = _identifier(segment.orc_2, encoding)
+            pending_filler = _identifier(segment.orc_3, encoding)
         elif segment.name == "OBR":
             close_order()
-            procedure = segment.get(4)
+            procedure = segment.obr_4
             current = {
                 "control": pending_control,
-                "placer_order": _identifier(segment.get(2), delimiters) or pending_placer,
-                "accession": _identifier(segment.get(3), delimiters) or pending_filler,
-                "procedure_code": _text(component(procedure, delimiters.component, 1), delimiters),
-                "procedure_text": _text(component(procedure, delimiters.component, 2), delimiters),
-                "observation_time": _text(segment.get(7), delimiters),
-                "report_time": _text(segment.get(22), delimiters),
+                "placer_order": _identifier(segment.obr_2, encoding) or pending_placer,
+                "accession": _identifier(segment.obr_3, encoding) or pending_filler,
+                "procedure_code": _text(component_text(procedure, 1), encoding),
+                "procedure_text": _text(component_text(procedure, 2), encoding),
+                "observation_time": _text(field_text(segment.obr_7), encoding),
+                "report_time": _text(field_text(segment.obr_22), encoding),
             }
             open_observations = []
         elif segment.name == "OBX":
@@ -92,9 +101,9 @@ def extract(message: Message) -> ClinicalRecord:
                     "report_time": "",
                 }
                 open_observations = []
-            open_observations.append(_observation(segment, delimiters))
+            open_observations.append(_observation(segment, encoding))
         elif segment.name == "PV1" and visit is None:
-            visit = _visit(segment, delimiters)
+            visit = _visit(segment, encoding)
 
     close_order()
 
@@ -105,10 +114,10 @@ def extract(message: Message) -> ClinicalRecord:
         sex=sex,
         message_type=message_type,
         trigger_event=trigger,
-        message_datetime=_text(header.get(7), delimiters),
-        control_id=_text(header.get(10), delimiters),
-        sending_app=_text(header.get(3), delimiters),
-        sending_facility=_text(header.get(4), delimiters),
+        message_datetime=_text(field_text(header.msh_7), encoding),
+        control_id=_text(field_text(header.msh_10), encoding),
+        sending_app=_text(field_text(header.msh_3), encoding),
+        sending_facility=_text(field_text(header.msh_4), encoding),
         category=_category(message_type, orders, visit),
         orders=tuple(orders),
         visit=visit,
@@ -117,49 +126,46 @@ def extract(message: Message) -> ClinicalRecord:
 
 
 def _patient(
-    pid: Segment | None, delimiters: Delimiters
+    pid: Any, encoding: dict[str, str]
 ) -> tuple[tuple[str, ...], str, str, str]:
-    if pid is None:
+    if not pid:
         return (), "", "", ""
 
     ids: list[str] = []
-    legacy = _identifier(pid.get(2), delimiters)
+    legacy = _identifier(pid.pid_2, encoding)
     if legacy:
         ids.append(legacy)
-    for repetition in repetitions(pid.get(3), delimiters.repetition):
-        identifier = _identifier(repetition, delimiters)
+    for repetition in repetitions(pid.pid_3):
+        identifier = _text(repetition_component(repetition, 1), encoding).strip()
         if identifier and identifier not in ids:
             ids.append(identifier)
-    name = _person_name(pid.get(5), delimiters)
-    birth_date = _text(pid.get(7), delimiters)
-    sex = _text(pid.get(8), delimiters)
+    name = _person_name(pid.pid_5, encoding)
+    birth_date = _text(field_text(pid.pid_7), encoding)
+    sex = _text(field_text(pid.pid_8), encoding)
     return tuple(ids), name, birth_date, sex
 
 
-def _observation(segment: Segment, delimiters: Delimiters) -> Observation:
-    identifier_field = segment.get(3)
+def _observation(segment: Any, encoding: dict[str, str]) -> Observation:
+    identifier_field = segment.obx_3
     return Observation(
-        set_id=_text(segment.get(1), delimiters),
-        value_type=_text(segment.get(2), delimiters),
-        identifier=_text(component(identifier_field, delimiters.component, 1), delimiters),
-        text=_text(component(identifier_field, delimiters.component, 2), delimiters),
-        coding_system=_text(component(identifier_field, delimiters.component, 3), delimiters),
-        value=_text(segment.get(5), delimiters),
-        units=_text(component(segment.get(6), delimiters.component, 1), delimiters),
-        status=_text(segment.get(11), delimiters),
+        set_id=_text(field_text(segment.obx_1), encoding),
+        value_type=_text(field_text(segment.obx_2), encoding),
+        identifier=_text(component_text(identifier_field, 1), encoding),
+        text=_text(component_text(identifier_field, 2), encoding),
+        coding_system=_text(component_text(identifier_field, 3), encoding),
+        value=_text(field_text(segment.obx_5), encoding),
+        units=_text(component_text(segment.obx_6, 1), encoding),
+        status=_text(field_text(segment.obx_11), encoding),
     )
 
 
-def _visit(segment: Segment, delimiters: Delimiters) -> Visit:
-    location = segment.get(3)
-    parts = [
-        _text(component(location, delimiters.component, index), delimiters)
-        for index in (1, 2, 3)
-    ]
+def _visit(segment: Any, encoding: dict[str, str]) -> Visit:
+    location = segment.pv1_3
+    parts = [_text(component_text(location, index), encoding) for index in (1, 2, 3)]
     return Visit(
-        patient_class=_text(segment.get(2), delimiters),
+        patient_class=_text(field_text(segment.pv1_2), encoding),
         location="-".join(part for part in parts if part),
-        attending=_clinician(segment.get(7), delimiters),
+        attending=_clinician(segment.pv1_7, encoding),
     )
 
 
@@ -173,39 +179,34 @@ def _category(message_type: str, orders: list[Order], visit: Visit | None) -> st
     return "message"
 
 
-def _identifier(field: str, delimiters: Delimiters) -> str:
+def _identifier(field: Any, encoding: dict[str, str]) -> str:
     """First component of an identifier field, which is the id itself."""
 
-    return _text(component(field, delimiters.component, 1), delimiters).strip()
+    return _text(component_text(field, 1), encoding).strip()
 
 
-def _person_name(field: str, delimiters: Delimiters) -> str:
+def _person_name(field: Any, encoding: dict[str, str]) -> str:
     """Format an XPN name. A single component is kept as written."""
 
-    parts = [_text(part, delimiters) for part in field.split(delimiters.component)] if field else []
-    if len(parts) <= 1:
-        return parts[0] if parts else ""
-    family = parts[0]
-    given = parts[1] if len(parts) > 1 else ""
-    middle = parts[2] if len(parts) > 2 else ""
-    suffix = parts[3] if len(parts) > 3 else ""
-    prefix = parts[4] if len(parts) > 4 else ""
+    parts = [_text(component_text(field, index), encoding) for index in range(1, 6)]
+    if not any(parts[1:]):
+        return parts[0]
+    family, given, middle, suffix, prefix = parts
     return " ".join(part for part in (prefix, given, middle, family, suffix) if part)
 
 
-def _clinician(field: str, delimiters: Delimiters) -> str:
+def _clinician(field: Any, encoding: dict[str, str]) -> str:
     """Format the first XCN repetition as ``given family``, or the id."""
 
-    reps = repetitions(field, delimiters.repetition)
+    reps = repetitions(field)
     if not reps:
         return ""
-    parts = [_text(part, delimiters) for part in reps[0].split(delimiters.component)]
-    identifier = parts[0] if parts else ""
-    family = parts[1] if len(parts) > 1 else ""
-    given = parts[2] if len(parts) > 2 else ""
+    identifier = _text(repetition_component(reps[0], 1), encoding)
+    family = _text(repetition_component(reps[0], 2), encoding)
+    given = _text(repetition_component(reps[0], 3), encoding)
     name = " ".join(part for part in (given, family) if part)
     return name or identifier
 
 
-def _text(value: str, delimiters: Delimiters) -> str:
-    return unescape(value, delimiters)
+def _text(value: str, encoding: dict[str, str]) -> str:
+    return unescape(value, encoding)

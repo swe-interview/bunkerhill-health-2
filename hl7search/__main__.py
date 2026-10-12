@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from hl7search.framing import MllpSession, wrap_frame
-from hl7search.parse import ParseError, parse_message
+from hl7search.parse import ParseError, field_text, parse_message
 from hl7search.report import format_report
 from hl7search.samples import SAMPLE_ORM, load_messages
 from hl7search.search import search_patient
@@ -177,10 +177,10 @@ def _ack_code(ack: str) -> str:
         message = parse_message(ack)
     except ParseError:
         return ""
-    msa = message.segment("MSA")
-    if msa is None:
+    msa = message.hl7.msa
+    if not msa:
         return ""
-    return msa.get(1)
+    return field_text(msa.msa_1)
 
 
 async def _transmit(host: str, port: int, payload: str) -> str:

@@ -105,7 +105,8 @@ class ParseTests(unittest.TestCase):
         raw = (
             "MSH|^~\\&|APP|FAC|||20240101120000||ORU^R01|C2|P|2.5\r"
             "PID|1||P1\r"
-            r"OBX|1|ST|1^Note||pain \T\ swelling" "\r"
+            r"OBX|1|ST|1^Note||pain \T\ swelling"
+            "\r"
         )
         observation = extract(parse_message(raw)).orders[0].observations[0]
         self.assertEqual(observation.value, "pain & swelling")

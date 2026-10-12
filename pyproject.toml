@@ -3,6 +3,9 @@ name = "hl7search"
 version = "0.1.0"
 description = "Accept HL7 v2 messages over TCP and search them by patient."
 requires-python = ">=3.12"
+dependencies = [
+    "hl7apy>=1.3.5",
+]
 
 [project.scripts]
 hl7search = "hl7search.__main__:main"
